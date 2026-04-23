@@ -12,6 +12,8 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROMPT_FILE="$SCRIPT_DIR/../prompts/capture-prompt.md"
 APPEND_SCRIPT="$SCRIPT_DIR/append-candidates.sh"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+CLAUDE_CHROME_ARG="${CLAUDE_CHROME_ARG:---chrome}"
+CLAUDE_PERMISSION_ARG="${CLAUDE_PERMISSION_ARG:---dangerously-skip-permissions}"
 LOG_FILE="${CAPTURE_LOG_FILE:-$PROJECT_DIR/logs/capture.log}"
 LOCK_DIR="${CAPTURE_LOCK_DIR:-$PROJECT_DIR/.claude-obsidian-capture.lock}"
 TMP_OUTPUT="$(mktemp -t claude-obsidian-capture.XXXXXX)"
@@ -125,7 +127,20 @@ Runtime context:
 $EXISTING_SESSION_IDS
 "
 
-  if "$CLAUDE_BIN" --print "$PROMPT" > "$TMP_OUTPUT" 2>> "$LOG_FILE"; then
+  typeset -a claude_args
+  claude_args=(--print)
+
+  if [[ -n "$CLAUDE_CHROME_ARG" ]]; then
+    claude_args=("$CLAUDE_CHROME_ARG" "${claude_args[@]}")
+    log "INFO invoking claude with browser integration flag: $CLAUDE_CHROME_ARG"
+  fi
+
+  if [[ -n "$CLAUDE_PERMISSION_ARG" ]]; then
+    claude_args=("$CLAUDE_PERMISSION_ARG" "${claude_args[@]}")
+    log "INFO invoking claude with permission bypass flag: $CLAUDE_PERMISSION_ARG"
+  fi
+
+  if "$CLAUDE_BIN" "${claude_args[@]}" "$PROMPT" > "$TMP_OUTPUT" 2>> "$LOG_FILE"; then
     "$APPEND_SCRIPT" "$TMP_OUTPUT" "$CAPTURE_FILE" "$LOG_FILE"
     log "INFO capture run finished for $DATE"
   else

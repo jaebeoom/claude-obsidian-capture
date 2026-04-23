@@ -18,6 +18,74 @@ log() {
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG_FILE"
 }
 
+log_first_nonempty_line() {
+  local output_file="$1"
+  local first_line
+
+  if [[ ! -s "$output_file" ]]; then
+    return
+  fi
+
+  first_line="$(awk 'NF { print; exit }' "$output_file")"
+  if [[ -n "$first_line" ]]; then
+    if (( ${#first_line} > 200 )); then
+      first_line="${first_line[1,200]}..."
+    fi
+    log "WARN Claude output first non-empty line: $first_line"
+  fi
+}
+
+contains_capture_markers() {
+  local output_file="$1"
+
+  grep -Eq '<!--[[:space:]]*capture:item-(start|end)[[:space:]]*-->' "$output_file"
+}
+
+contains_no_capture_sentinel() {
+  local output_file="$1"
+
+  awk '
+    $0 == "NO_CAPTURE_CANDIDATES" {
+      found = 1
+    }
+    END {
+      exit !found
+    }
+  ' "$output_file"
+}
+
+contains_extra_nonempty_output() {
+  local output_file="$1"
+
+  awk '
+    NF && $0 != "NO_CAPTURE_CANDIDATES" {
+      extra = 1
+    }
+    END {
+      exit !extra
+    }
+  ' "$output_file"
+}
+
+log_unparseable_output() {
+  local output_file="$1"
+
+  if [[ ! -s "$output_file" ]]; then
+    log "WARN Claude output was empty"
+    return
+  fi
+
+  if grep -Eiq 'requires approval|dangerously-?skip-?permissions|permission mode|AppleScript|osascript' "$output_file"; then
+    log "ERROR Claude capture automation was blocked by permission requirements"
+  elif grep -Fq 'NO_CAPTURE_CANDIDATES' "$output_file"; then
+    log "WARN Claude output included NO_CAPTURE_CANDIDATES but parseable capture blocks were not found"
+  else
+    log "WARN Claude output did not contain parseable capture blocks"
+  fi
+
+  log_first_nonempty_line "$output_file"
+}
+
 session_exists() {
   local capture_file="$1"
   local session_id="$2"
@@ -45,24 +113,24 @@ if [[ ! -f "$OUTPUT_FILE" ]]; then
   exit 1
 fi
 
+if ! contains_capture_markers "$OUTPUT_FILE" && contains_no_capture_sentinel "$OUTPUT_FILE"; then
+  if grep -Eiq 'requires approval|dangerously-?skip-?permissions|permission mode|AppleScript|osascript' "$OUTPUT_FILE"; then
+    log "ERROR Claude capture automation was blocked by permission requirements"
+    log_first_nonempty_line "$OUTPUT_FILE"
+    log "INFO no complete capture candidate blocks found"
+  else
+    if contains_extra_nonempty_output "$OUTPUT_FILE"; then
+      log "WARN Claude output mixed NO_CAPTURE_CANDIDATES with additional text"
+      log_first_nonempty_line "$OUTPUT_FILE"
+    fi
+    log "INFO no capture candidates reported by Claude"
+  fi
+  exit 0
+fi
+
 mkdir -p "$BLOCK_DIR"
 : > "$BLOCK_INDEX"
 : > "$PARSE_LOG"
-
-if awk '
-  NF {
-    nonempty += 1
-    if ($0 == "NO_CAPTURE_CANDIDATES") {
-      matched = 1
-    }
-  }
-  END {
-    exit !(nonempty == 1 && matched == 1)
-  }
-' "$OUTPUT_FILE"; then
-  log "INFO no capture candidates reported by Claude"
-  exit 0
-fi
 
 awk -v dir="$BLOCK_DIR" -v index_file="$BLOCK_INDEX" -v parse_log="$PARSE_LOG" '
   /<!--[[:space:]]*capture:item-start[[:space:]]*-->/ {
@@ -104,6 +172,7 @@ while IFS= read -r parse_warning; do
 done < "$PARSE_LOG"
 
 if [[ ! -s "$BLOCK_INDEX" ]]; then
+  log_unparseable_output "$OUTPUT_FILE"
   log "INFO no complete capture candidate blocks found"
   exit 0
 fi

@@ -1,9 +1,9 @@
 # claude-obsidian-capture
 
-Daily capture automation for Claude.ai project conversations.
+Daily capture automation for recent Claude.ai conversations.
 
-The job asks Claude to review recent conversations in the Claude.ai project named
-`Obsidian Capture Source`, print capture-worthy sessions as deterministic markdown
+The job asks Claude to review recent conversations from the account-wide Claude.ai
+conversation list, print capture-worthy sessions as deterministic markdown
 blocks, and append only new session IDs to the Obsidian Capture vault.
 
 ## Workflow
@@ -11,7 +11,7 @@ blocks, and append only new session IDs to the Obsidian Capture vault.
 ```text
 launchd
   -> scripts/run-capture.sh
-    -> claude --print prompts/capture-prompt.md
+    -> claude --chrome --dangerously-skip-permissions --print prompts/capture-prompt.md
     -> scripts/append-candidates.sh
     -> Vault/Capture/YYYY-MM-DD.md
 ```
@@ -19,6 +19,20 @@ launchd
 `append-candidates.sh` is the deterministic write boundary. Claude is instructed
 to write nothing directly and to print only candidate blocks or
 `NO_CAPTURE_CANDIDATES`.
+
+`run-capture.sh` enables `--chrome` and `--dangerously-skip-permissions` by
+default so the non-interactive launchd job can use Claude's browser integration
+without approval prompts. Set `CLAUDE_CHROME_ARG=""` or
+`CLAUDE_PERMISSION_ARG=""` to disable those overrides.
+
+The capture prompt also forces the browser work into a dedicated automation tab
+and tells Claude to prefer a direct tab-close tool such as `tabs_close_mcp`
+when that tool is exposed in the current run. It explicitly forbids using
+`shortcuts_list`, `shortcuts_execute`, `window.close()`, or page-level
+JavaScript keyboard events for tab closing. If no close-capable tool is
+available, the run must leave the automation tab alone and still emit only
+deterministic capture stdout. Existing user tabs and windows must not be reused
+or closed by the job.
 
 ## Key Paths
 

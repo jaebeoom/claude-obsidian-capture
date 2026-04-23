@@ -19,7 +19,16 @@ assert_file_contains() {
   local file="$1"
   local text="$2"
 
-  grep -Fq "$text" "$file" || fail "expected $file to contain: $text"
+  grep -Fq -- "$text" "$file" || fail "expected $file to contain: $text"
+}
+
+assert_file_not_contains() {
+  local file="$1"
+  local text="$2"
+
+  if grep -Fq -- "$text" "$file"; then
+    fail "expected $file to not contain: $text"
+  fi
 }
 
 assert_file_not_exists() {
@@ -67,7 +76,7 @@ EOF
 cat > "$APPEND_OUTPUT" <<'EOF'
 <!-- capture:item-start -->
 ## AI 세션 (10:00, claude.ai claude-opus-4-7)
-<!-- source: claude.ai Obsidian Capture Source -->
+<!-- source: claude.ai recent conversations -->
 <!-- capture:session-id=claude.ai:existing -->
 
 **나**: 중복
@@ -78,7 +87,7 @@ cat > "$APPEND_OUTPUT" <<'EOF'
 <!-- capture:item-end -->
 <!-- capture:item-start -->
 ## AI 세션 (11:00, claude.ai claude-opus-4-7)
-<!-- source: claude.ai Obsidian Capture Source -->
+<!-- source: claude.ai recent conversations -->
 <!-- capture:session-id=claude.ai:new -->
 
 **나**: 신규
@@ -116,6 +125,42 @@ printf 'NO_CAPTURE_CANDIDATES\n' > "$NO_CAPTURE_OUTPUT"
 assert_file_not_exists "$NO_CAPTURE_FILE"
 assert_file_contains "$NO_CAPTURE_LOG" "INFO no capture candidates reported by Claude"
 
+MIXED_NO_CAPTURE_OUTPUT="$TMP_DIR/mixed-no-capture-output.md"
+MIXED_NO_CAPTURE_FILE="$TMP_DIR/mixed-no-capture.md"
+MIXED_NO_CAPTURE_LOG="$TMP_DIR/mixed-no-capture.log"
+
+cat > "$MIXED_NO_CAPTURE_OUTPUT" <<'EOF'
+Tab close capability was unavailable, so the automation tab remains open.
+
+NO_CAPTURE_CANDIDATES
+EOF
+
+"$SCRIPT_DIR/append-candidates.sh" "$MIXED_NO_CAPTURE_OUTPUT" "$MIXED_NO_CAPTURE_FILE" "$MIXED_NO_CAPTURE_LOG"
+
+assert_file_not_exists "$MIXED_NO_CAPTURE_FILE"
+assert_file_contains "$MIXED_NO_CAPTURE_LOG" "WARN Claude output mixed NO_CAPTURE_CANDIDATES with additional text"
+assert_file_contains "$MIXED_NO_CAPTURE_LOG" "WARN Claude output first non-empty line: Tab close capability was unavailable, so the automation tab remains open."
+assert_file_contains "$MIXED_NO_CAPTURE_LOG" "INFO no capture candidates reported by Claude"
+
+PERMISSION_OUTPUT="$TMP_DIR/permission-output.md"
+PERMISSION_FILE="$TMP_DIR/permission-capture.md"
+PERMISSION_LOG="$TMP_DIR/permission.log"
+
+cat > "$PERMISSION_OUTPUT" <<'EOF'
+Bash 명령이 승인 없이 실행될 수 없는 상태입니다. Chrome 브라우저 자동화를 위한 AppleScript 실행이 차단되고 있습니다. `claude --print` 자동 실행 컨텍스트에서는 `--dangerouslySkipPermissions` 플래그가 필요합니다.
+
+현재 컨텍스트에서는 Claude.ai에 접근할 수 없으므로:
+
+NO_CAPTURE_CANDIDATES
+EOF
+
+"$SCRIPT_DIR/append-candidates.sh" "$PERMISSION_OUTPUT" "$PERMISSION_FILE" "$PERMISSION_LOG"
+
+assert_file_not_exists "$PERMISSION_FILE"
+assert_file_contains "$PERMISSION_LOG" "ERROR Claude capture automation was blocked by permission requirements"
+assert_file_contains "$PERMISSION_LOG" "WARN Claude output first non-empty line: Bash 명령이 승인 없이 실행될 수 없는 상태입니다."
+assert_file_contains "$PERMISSION_LOG" "INFO no complete capture candidate blocks found"
+
 RUN_OUTPUT="$TMP_DIR/run-output.md"
 RUN_VAULT="$TMP_DIR/vault"
 RUN_LOG="$TMP_DIR/run.log"
@@ -125,7 +170,7 @@ RUN_CAPTURE="$RUN_VAULT/2099-01-02.md"
 cat > "$RUN_OUTPUT" <<'EOF'
 <!-- capture:item-start -->
 ## AI 세션 (22:00, claude.ai claude-opus-4-7)
-<!-- source: claude.ai Obsidian Capture Source -->
+<!-- source: claude.ai recent conversations -->
 <!-- capture:session-id=claude.ai:run-new -->
 
 **나**: run fixture
@@ -155,6 +200,51 @@ CLAUDE_CAPTURE_OUTPUT_FILE="$RUN_OUTPUT" \
 
 assert_equals "1" "$(count_fixed "$RUN_CAPTURE" "capture:session-id=claude.ai:run-new")" "run duplicate session count"
 assert_file_contains "$RUN_LOG" "INFO skipped duplicate capture candidate: claude.ai:run-new"
+
+FLAG_CLAUDE="$TMP_DIR/flag-claude"
+FLAG_ARGS="$TMP_DIR/flag-args.log"
+FLAG_LOG="$TMP_DIR/flag.log"
+FLAG_VAULT="$TMP_DIR/flag-vault"
+FLAG_LOCK="$TMP_DIR/flag.lock"
+
+cat > "$FLAG_CLAUDE" <<'EOF'
+#!/bin/zsh
+printf '%s\n' "$@" > "$CLAUDE_ARGS_FILE"
+printf 'NO_CAPTURE_CANDIDATES\n'
+EOF
+chmod +x "$FLAG_CLAUDE"
+
+CAPTURE_DATE="2099-01-04" \
+VAULT_CAPTURE="$FLAG_VAULT" \
+CAPTURE_LOG_FILE="$FLAG_LOG" \
+CAPTURE_LOCK_DIR="$FLAG_LOCK" \
+CLAUDE_BIN="$FLAG_CLAUDE" \
+CLAUDE_ARGS_FILE="$FLAG_ARGS" \
+"$SCRIPT_DIR/run-capture.sh"
+
+assert_file_contains "$FLAG_ARGS" "--dangerously-skip-permissions"
+assert_file_contains "$FLAG_ARGS" "--chrome"
+assert_file_contains "$FLAG_ARGS" "--print"
+assert_file_contains "$FLAG_LOG" "INFO invoking claude with browser integration flag: --chrome"
+assert_file_contains "$FLAG_LOG" "INFO invoking claude with permission bypass flag: --dangerously-skip-permissions"
+assert_file_contains "$FLAG_LOG" "INFO no capture candidates reported by Claude"
+
+PROMPT_FILE="$SCRIPT_DIR/../prompts/capture-prompt.md"
+
+assert_file_contains "$PROMPT_FILE" "이번 실행 전용의 자동화 탭을 하나 만든다"
+assert_file_contains "$PROMPT_FILE" "기존 사용자 탭이나 창을 재사용하지 않는다"
+assert_file_contains "$PROMPT_FILE" "자동화에 사용한 탭만 닫는다"
+assert_file_contains "$PROMPT_FILE" '`tabs_close_mcp`'
+assert_file_contains "$PROMPT_FILE" '`computer`'
+assert_file_contains "$PROMPT_FILE" '`shortcuts_list`'
+assert_file_contains "$PROMPT_FILE" '`shortcuts_execute`'
+assert_file_contains "$PROMPT_FILE" '`tabs_context_mcp`'
+assert_file_contains "$PROMPT_FILE" "자동화 탭 id가 목록에서 사라졌는지 확인한다"
+assert_file_contains "$PROMPT_FILE" '`window.close()`'
+assert_file_contains "$PROMPT_FILE" "페이지 레벨 JavaScript keyboard event는 탭 닫기 용도로 사용하지 않는다"
+assert_file_contains "$PROMPT_FILE" "이 종료 단계의 설명이나 실패 사유를 stdout에 출력하지 않는다"
+assert_file_not_contains "$PROMPT_FILE" "Cmd+W"
+assert_file_not_contains "$PROMPT_FILE" "가능하면 해당 탭 id를 대상으로 닫고"
 
 FAKE_CLAUDE="$TMP_DIR/fake-claude"
 FAKE_LOG="$TMP_DIR/fake.log"
