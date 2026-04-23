@@ -75,7 +75,7 @@ log_unparseable_output() {
     return
   fi
 
-  if grep -Eiq 'requires approval|dangerously-?skip-?permissions|permission mode|AppleScript|osascript' "$output_file"; then
+  if grep -Eiq 'requires approval|permission mode|AppleScript|osascript' "$output_file"; then
     log "ERROR Claude capture automation was blocked by permission requirements"
   elif grep -Fq 'NO_CAPTURE_CANDIDATES' "$output_file"; then
     log "WARN Claude output included NO_CAPTURE_CANDIDATES but parseable capture blocks were not found"
@@ -114,7 +114,7 @@ if [[ ! -f "$OUTPUT_FILE" ]]; then
 fi
 
 if ! contains_capture_markers "$OUTPUT_FILE" && contains_no_capture_sentinel "$OUTPUT_FILE"; then
-  if grep -Eiq 'requires approval|dangerously-?skip-?permissions|permission mode|AppleScript|osascript' "$OUTPUT_FILE"; then
+  if grep -Eiq 'requires approval|permission mode|AppleScript|osascript' "$OUTPUT_FILE"; then
     log "ERROR Claude capture automation was blocked by permission requirements"
     log_first_nonempty_line "$OUTPUT_FILE"
     log "INFO no complete capture candidate blocks found"

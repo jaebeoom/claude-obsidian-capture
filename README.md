@@ -11,7 +11,8 @@ blocks, and append only new session IDs to the Obsidian Capture vault.
 ```text
 launchd
   -> scripts/run-capture.sh
-    -> claude --chrome --dangerously-skip-permissions --print prompts/capture-prompt.md
+    -> scripts/collect-claude-brave.py
+    -> claude --print prompts/capture-from-scrape-prompt.md + scraped source
     -> scripts/append-candidates.sh
     -> Vault/Capture/YYYY-MM-DD.md
 ```
@@ -20,19 +21,20 @@ launchd
 to write nothing directly and to print only candidate blocks or
 `NO_CAPTURE_CANDIDATES`.
 
-`run-capture.sh` enables `--chrome` and `--dangerously-skip-permissions` by
-default so the non-interactive launchd job can use Claude's browser integration
-without approval prompts. Set `CLAUDE_CHROME_ARG=""` or
-`CLAUDE_PERMISSION_ARG=""` to disable those overrides.
+The capture backend launches a dedicated Brave profile with the DevTools
+Protocol, scrapes recent Claude.ai conversation pages into a temporary local
+source file, closes only that Brave process, and then asks Claude CLI to classify
+the scraped source without browser tools.
 
-The capture prompt also forces the browser work into a dedicated automation tab
-and tells Claude to prefer a direct tab-close tool such as `tabs_close_mcp`
-when that tool is exposed in the current run. It explicitly forbids using
-`shortcuts_list`, `shortcuts_execute`, `window.close()`, or page-level
-JavaScript keyboard events for tab closing. If no close-capable tool is
-available, the run must leave the automation tab alone and still emit only
-deterministic capture stdout. Existing user tabs and windows must not be reused
-or closed by the job.
+The dedicated Brave profile path defaults to
+`local/brave-claude-capture-profile`. On first use, check that profile with
+`scripts/collect-claude-brave.py --auth-check-only --keep-open-on-auth`; if
+Claude.ai asks you to log in, complete the login in the opened dedicated Brave
+window, close it, and rerun the check.
+
+The automation does not use Claude Code browser tools. Local code owns the
+dedicated Brave process lifecycle, so the normal Brave session is not used for
+scheduled capture runs.
 
 ## Key Paths
 
@@ -51,12 +53,13 @@ zsh -n scripts/run-capture.sh
 zsh -n scripts/append-candidates.sh
 zsh -n scripts/test-capture-local.sh
 plutil -lint launchd/com.nathan.claude-obsidian-capture.plist
-python3 -B -c "import ast, pathlib; ast.parse(pathlib.Path('scripts/bulk_import.py').read_text(encoding='utf-8'))"
+python3 -B -c "import ast, pathlib; [ast.parse(pathlib.Path(path).read_text(encoding='utf-8')) for path in ('scripts/bulk_import.py', 'scripts/collect-claude-brave.py')]"
 scripts/test-capture-local.sh
 ```
 
 The fixture test covers append parsing, duplicate skipping, missing session IDs,
-`NO_CAPTURE_CANDIDATES`, and the run wrapper's fixture mode.
+`NO_CAPTURE_CANDIDATES`, the Brave scrape fixture path, and the run wrapper's
+fixture mode.
 
 ## Legal And Terms Notes
 

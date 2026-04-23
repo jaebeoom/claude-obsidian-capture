@@ -147,7 +147,7 @@ PERMISSION_FILE="$TMP_DIR/permission-capture.md"
 PERMISSION_LOG="$TMP_DIR/permission.log"
 
 cat > "$PERMISSION_OUTPUT" <<'EOF'
-Bash 명령이 승인 없이 실행될 수 없는 상태입니다. Chrome 브라우저 자동화를 위한 AppleScript 실행이 차단되고 있습니다. `claude --print` 자동 실행 컨텍스트에서는 `--dangerouslySkipPermissions` 플래그가 필요합니다.
+Bash 명령이 승인 없이 실행될 수 없는 상태입니다. AppleScript 실행이 차단되고 있습니다. 자동 실행 컨텍스트에서는 권한 우회 플래그가 필요합니다.
 
 현재 컨텍스트에서는 Claude.ai에 접근할 수 없으므로:
 
@@ -201,6 +201,22 @@ CLAUDE_CAPTURE_OUTPUT_FILE="$RUN_OUTPUT" \
 assert_equals "1" "$(count_fixed "$RUN_CAPTURE" "capture:session-id=claude.ai:run-new")" "run duplicate session count"
 assert_file_contains "$RUN_LOG" "INFO skipped duplicate capture candidate: claude.ai:run-new"
 
+BRAVE_SOURCE="$TMP_DIR/brave-source.md"
+cat > "$BRAVE_SOURCE" <<'EOF'
+<!-- scraped:claude-ai-conversations-start -->
+<!-- scraped:conversation-start -->
+<!-- source: claude.ai dedicated Brave profile -->
+<!-- capture:session-id=claude.ai:brave-source -->
+<!-- title: Brave source fixture -->
+<!-- url: https://claude.ai/chat/brave-source -->
+
+사용자와 Claude가 나눈 충분히 긴 테스트 대화 원문.
+투자 인사이트와 의사결정 근거가 있다고 가정한다.
+
+<!-- scraped:conversation-end -->
+<!-- scraped:claude-ai-conversations-end -->
+EOF
+
 FLAG_CLAUDE="$TMP_DIR/flag-claude"
 FLAG_ARGS="$TMP_DIR/flag-args.log"
 FLAG_LOG="$TMP_DIR/flag.log"
@@ -220,31 +236,45 @@ CAPTURE_LOG_FILE="$FLAG_LOG" \
 CAPTURE_LOCK_DIR="$FLAG_LOCK" \
 CLAUDE_BIN="$FLAG_CLAUDE" \
 CLAUDE_ARGS_FILE="$FLAG_ARGS" \
+CLAUDE_SCRAPE_OUTPUT_FILE="$BRAVE_SOURCE" \
 "$SCRIPT_DIR/run-capture.sh"
 
-assert_file_contains "$FLAG_ARGS" "--dangerously-skip-permissions"
-assert_file_contains "$FLAG_ARGS" "--chrome"
 assert_file_contains "$FLAG_ARGS" "--print"
-assert_file_contains "$FLAG_LOG" "INFO invoking claude with browser integration flag: --chrome"
-assert_file_contains "$FLAG_LOG" "INFO invoking claude with permission bypass flag: --dangerously-skip-permissions"
+assert_file_contains "$FLAG_LOG" "INFO using scraped Claude.ai fixture: $BRAVE_SOURCE"
 assert_file_contains "$FLAG_LOG" "INFO no capture candidates reported by Claude"
 
-PROMPT_FILE="$SCRIPT_DIR/../prompts/capture-prompt.md"
+SCRAPE_PROMPT_FILE="$SCRIPT_DIR/../prompts/capture-from-scrape-prompt.md"
 
-assert_file_contains "$PROMPT_FILE" "이번 실행 전용의 자동화 탭을 하나 만든다"
-assert_file_contains "$PROMPT_FILE" "기존 사용자 탭이나 창을 재사용하지 않는다"
-assert_file_contains "$PROMPT_FILE" "자동화에 사용한 탭만 닫는다"
-assert_file_contains "$PROMPT_FILE" '`tabs_close_mcp`'
-assert_file_contains "$PROMPT_FILE" '`computer`'
-assert_file_contains "$PROMPT_FILE" '`shortcuts_list`'
-assert_file_contains "$PROMPT_FILE" '`shortcuts_execute`'
-assert_file_contains "$PROMPT_FILE" '`tabs_context_mcp`'
-assert_file_contains "$PROMPT_FILE" "자동화 탭 id가 목록에서 사라졌는지 확인한다"
-assert_file_contains "$PROMPT_FILE" '`window.close()`'
-assert_file_contains "$PROMPT_FILE" "페이지 레벨 JavaScript keyboard event는 탭 닫기 용도로 사용하지 않는다"
-assert_file_contains "$PROMPT_FILE" "이 종료 단계의 설명이나 실패 사유를 stdout에 출력하지 않는다"
-assert_file_not_contains "$PROMPT_FILE" "Cmd+W"
-assert_file_not_contains "$PROMPT_FILE" "가능하면 해당 탭 id를 대상으로 닫고"
+assert_file_contains "$SCRAPE_PROMPT_FILE" "브라우저 도구를 사용하지 않는다"
+assert_file_contains "$SCRAPE_PROMPT_FILE" "Scraped Claude.ai conversations"
+assert_file_contains "$SCRAPE_PROMPT_FILE" "NO_CAPTURE_CANDIDATES"
+
+NO_SOURCE_OUTPUT="$TMP_DIR/no-source.md"
+NO_SOURCE_CLAUDE="$TMP_DIR/no-source-claude"
+NO_SOURCE_CALLED="$TMP_DIR/no-source-called"
+NO_SOURCE_LOG="$TMP_DIR/no-source.log"
+NO_SOURCE_VAULT="$TMP_DIR/no-source-vault"
+NO_SOURCE_LOCK="$TMP_DIR/no-source.lock"
+
+printf 'NO_SOURCE_CONVERSATIONS\n' > "$NO_SOURCE_OUTPUT"
+cat > "$NO_SOURCE_CLAUDE" <<'EOF'
+#!/bin/zsh
+touch "$NO_SOURCE_CALLED_FILE"
+exit 99
+EOF
+chmod +x "$NO_SOURCE_CLAUDE"
+
+CAPTURE_DATE="2099-01-06" \
+VAULT_CAPTURE="$NO_SOURCE_VAULT" \
+CAPTURE_LOG_FILE="$NO_SOURCE_LOG" \
+CAPTURE_LOCK_DIR="$NO_SOURCE_LOCK" \
+CLAUDE_BIN="$NO_SOURCE_CLAUDE" \
+CLAUDE_SCRAPE_OUTPUT_FILE="$NO_SOURCE_OUTPUT" \
+NO_SOURCE_CALLED_FILE="$NO_SOURCE_CALLED" \
+"$SCRIPT_DIR/run-capture.sh"
+
+assert_file_not_exists "$NO_SOURCE_CALLED"
+assert_file_contains "$NO_SOURCE_LOG" "INFO no source Claude.ai conversations collected"
 
 FAKE_CLAUDE="$TMP_DIR/fake-claude"
 FAKE_LOG="$TMP_DIR/fake.log"
@@ -263,6 +293,7 @@ VAULT_CAPTURE="$FAKE_VAULT" \
 CAPTURE_LOG_FILE="$FAKE_LOG" \
 CAPTURE_LOCK_DIR="$FAKE_LOCK" \
 CLAUDE_BIN="$FAKE_CLAUDE" \
+CLAUDE_SCRAPE_OUTPUT_FILE="$BRAVE_SOURCE" \
 "$SCRIPT_DIR/run-capture.sh"
 fake_status=$?
 set -e

@@ -9,14 +9,19 @@ VAULT_CAPTURE="${VAULT_CAPTURE:-/Users/nathan/Code/Atelier/Vault/Capture}"
 CAPTURE_FILE="$VAULT_CAPTURE/$DATE.md"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROMPT_FILE="$SCRIPT_DIR/../prompts/capture-prompt.md"
+SCRAPE_PROMPT_FILE="$SCRIPT_DIR/../prompts/capture-from-scrape-prompt.md"
 APPEND_SCRIPT="$SCRIPT_DIR/append-candidates.sh"
+BRAVE_COLLECT_SCRIPT="$SCRIPT_DIR/collect-claude-brave.py"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
-CLAUDE_CHROME_ARG="${CLAUDE_CHROME_ARG:---chrome}"
-CLAUDE_PERMISSION_ARG="${CLAUDE_PERMISSION_ARG:---dangerously-skip-permissions}"
+BRAVE_BIN="${BRAVE_BIN:-/Applications/Brave Browser.app/Contents/MacOS/Brave Browser}"
+BRAVE_PROFILE_DIR="${BRAVE_PROFILE_DIR:-$PROJECT_DIR/local/brave-claude-capture-profile}"
+BRAVE_START_URL="${BRAVE_START_URL:-https://claude.ai/recents}"
+BRAVE_KEEP_OPEN_ON_AUTH="${BRAVE_KEEP_OPEN_ON_AUTH:-}"
 LOG_FILE="${CAPTURE_LOG_FILE:-$PROJECT_DIR/logs/capture.log}"
 LOCK_DIR="${CAPTURE_LOCK_DIR:-$PROJECT_DIR/.claude-obsidian-capture.lock}"
 TMP_OUTPUT="$(mktemp -t claude-obsidian-capture.XXXXXX)"
+TMP_SOURCE="$(mktemp -t claude-obsidian-source.XXXXXX)"
+TMP_EXISTING_IDS="$(mktemp -t claude-obsidian-existing.XXXXXX)"
 LOCK_ACQUIRED=0
 
 log() {
@@ -40,7 +45,7 @@ cleanup() {
   if [[ "$LOCK_ACQUIRED" -eq 1 ]]; then
     rm -rf "$LOCK_DIR"
   fi
-  rm -f "$TMP_OUTPUT"
+  rm -f "$TMP_OUTPUT" "$TMP_SOURCE" "$TMP_EXISTING_IDS"
 }
 
 trap cleanup EXIT
@@ -102,11 +107,6 @@ if [[ -n "${CLAUDE_CAPTURE_OUTPUT_FILE:-}" ]]; then
   "$APPEND_SCRIPT" "$TMP_OUTPUT" "$CAPTURE_FILE" "$LOG_FILE"
   log "INFO capture run finished for $DATE"
 else
-  if [[ ! -f "$PROMPT_FILE" ]]; then
-    log "ERROR prompt file not found: $PROMPT_FILE"
-    exit 1
-  fi
-
   if [[ "$CLAUDE_BIN" == */* ]]; then
     if [[ ! -x "$CLAUDE_BIN" ]]; then
       log "ERROR claude CLI not executable: $CLAUDE_BIN"
@@ -117,7 +117,62 @@ else
     exit 1
   fi
 
-  PROMPT="$(cat "$PROMPT_FILE")
+  printf '%s\n' "$EXISTING_SESSION_IDS" > "$TMP_EXISTING_IDS"
+
+  if [[ ! -f "$SCRAPE_PROMPT_FILE" ]]; then
+    log "ERROR scrape prompt file not found: $SCRAPE_PROMPT_FILE"
+    exit 1
+  fi
+
+  if [[ -n "${CLAUDE_SCRAPE_OUTPUT_FILE:-}" ]]; then
+    if [[ ! -f "$CLAUDE_SCRAPE_OUTPUT_FILE" ]]; then
+      log "ERROR scraped Claude.ai fixture not found: $CLAUDE_SCRAPE_OUTPUT_FILE"
+      exit 1
+    fi
+    log "INFO using scraped Claude.ai fixture: $CLAUDE_SCRAPE_OUTPUT_FILE"
+    cp "$CLAUDE_SCRAPE_OUTPUT_FILE" "$TMP_SOURCE"
+  else
+    if ! command -v python3 >/dev/null 2>&1; then
+      log "ERROR python3 not found on PATH"
+      exit 1
+    fi
+    if [[ ! -f "$BRAVE_COLLECT_SCRIPT" ]]; then
+      log "ERROR Brave collector script not found: $BRAVE_COLLECT_SCRIPT"
+      exit 1
+    fi
+
+    typeset -a collect_args
+    collect_args=(
+      python3 -B "$BRAVE_COLLECT_SCRIPT"
+      --date "$DATE"
+      --output "$TMP_SOURCE"
+      --log-file "$LOG_FILE"
+      --existing-session-ids-file "$TMP_EXISTING_IDS"
+      --brave-bin "$BRAVE_BIN"
+      --profile-dir "$BRAVE_PROFILE_DIR"
+      --start-url "$BRAVE_START_URL"
+    )
+    if [[ -n "$BRAVE_KEEP_OPEN_ON_AUTH" ]]; then
+      collect_args+=(--keep-open-on-auth)
+    fi
+
+    set +e
+    "${collect_args[@]}"
+    collect_status=$?
+    set -e
+    if [[ "$collect_status" -ne 0 ]]; then
+      log "ERROR dedicated Brave collection failed with status $collect_status"
+      exit "$collect_status"
+    fi
+  fi
+
+  if grep -Fxq 'NO_SOURCE_CONVERSATIONS' "$TMP_SOURCE"; then
+    log "INFO no source Claude.ai conversations collected"
+    log "INFO capture run finished for $DATE"
+    exit 0
+  fi
+
+  PROMPT="$(cat "$SCRAPE_PROMPT_FILE")
 
 ---
 Runtime context:
@@ -125,20 +180,14 @@ Runtime context:
 - Capture file path: $CAPTURE_FILE
 - Existing capture session ids:
 $EXISTING_SESSION_IDS
+
+---
+Scraped Claude.ai conversations:
+$(cat "$TMP_SOURCE")
 "
 
   typeset -a claude_args
   claude_args=(--print)
-
-  if [[ -n "$CLAUDE_CHROME_ARG" ]]; then
-    claude_args=("$CLAUDE_CHROME_ARG" "${claude_args[@]}")
-    log "INFO invoking claude with browser integration flag: $CLAUDE_CHROME_ARG"
-  fi
-
-  if [[ -n "$CLAUDE_PERMISSION_ARG" ]]; then
-    claude_args=("$CLAUDE_PERMISSION_ARG" "${claude_args[@]}")
-    log "INFO invoking claude with permission bypass flag: $CLAUDE_PERMISSION_ARG"
-  fi
 
   if "$CLAUDE_BIN" "${claude_args[@]}" "$PROMPT" > "$TMP_OUTPUT" 2>> "$LOG_FILE"; then
     "$APPEND_SCRIPT" "$TMP_OUTPUT" "$CAPTURE_FILE" "$LOG_FILE"

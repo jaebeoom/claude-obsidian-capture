@@ -39,12 +39,14 @@ id_rsa*
 id_ed25519*
 
 .claude-obsidian-capture.lock/
+.brave-claude-*-profile/
 logs/*.log
 logs/**/*.log
 logs/*.out
 logs/*.err
 logs/**/*.out
 logs/**/*.err
+logs/latest
 *.log.*
 
 tmp/
