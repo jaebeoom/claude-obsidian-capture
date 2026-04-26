@@ -9,9 +9,11 @@ fi
 OUTPUT_FILE="$1"
 CAPTURE_FILE="$2"
 LOG_FILE="$3"
+CAPTURE_DIR="$(dirname "$CAPTURE_FILE")"
 BLOCK_DIR="$(mktemp -d -t claude-obsidian-capture-blocks.XXXXXX)"
 BLOCK_INDEX="$BLOCK_DIR/index"
 PARSE_LOG="$BLOCK_DIR/parse.log"
+CAPTURE_DATE_LABEL="$(basename "$CAPTURE_FILE" .md)"
 
 log() {
   mkdir -p "$(dirname "$LOG_FILE")"
@@ -102,6 +104,22 @@ session_exists() {
   return 1
 }
 
+session_exists_in_capture_dir() {
+  local capture_dir="$1"
+  local session_id="$2"
+  local capture_file
+
+  [[ -d "$capture_dir" ]] || return 1
+
+  for capture_file in "$capture_dir"/*.md(N); do
+    if session_exists "$capture_file" "$session_id"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 cleanup() {
   rm -rf "$BLOCK_DIR"
 }
@@ -146,7 +164,6 @@ awk -v dir="$BLOCK_DIR" -v index_file="$BLOCK_INDEX" -v parse_log="$PARSE_LOG" '
 
   /<!--[[:space:]]*capture:item-end[[:space:]]*-->/ {
     if (!in_block) {
-      print "WARN capture:item-end without capture:item-start skipped" >> parse_log
       next
     }
     in_block = 0
@@ -193,7 +210,7 @@ while IFS= read -r block_file; do
     continue
   fi
 
-  if session_exists "$CAPTURE_FILE" "$session_id"; then
+  if session_exists_in_capture_dir "$CAPTURE_DIR" "$session_id"; then
     log "INFO skipped duplicate capture candidate: $session_id"
     skipped_count=$((skipped_count + 1))
     continue
@@ -203,7 +220,12 @@ while IFS= read -r block_file; do
     if [[ -s "$CAPTURE_FILE" ]]; then
       printf '\n\n'
     fi
-    cat "$block_file"
+    awk -v date_label="$CAPTURE_DATE_LABEL" '
+      /^## AI 세션 \((--|HH:MM),/ {
+        sub(/\((--|HH:MM),/, "(" date_label ",")
+      }
+      { print }
+    ' "$block_file"
     printf '\n'
   } >> "$CAPTURE_FILE"; then
     log "INFO appended capture candidate: $session_id"

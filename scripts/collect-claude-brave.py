@@ -71,6 +71,18 @@ def http_json(port: int, method: str, path: str, timeout: float = 2.0) -> Any:
         conn.close()
 
 
+def http_ok(port: int, method: str, path: str, timeout: float = 2.0) -> None:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request(method, path)
+        response = conn.getresponse()
+        body = response.read()
+        if response.status < 200 or response.status >= 300:
+            raise CdpError(f"DevTools HTTP {method} {path} failed with {response.status}: {body[:200]!r}")
+    finally:
+        conn.close()
+
+
 def wait_for_devtools(port: int, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
@@ -97,6 +109,28 @@ def wait_for_page(port: int, start_url: str, timeout: float) -> dict[str, Any]:
         except Exception:
             time.sleep(0.25)
     raise CdpError("No DevTools page target became available")
+
+
+def close_extra_pages(port: int, keep_target_id: str | None, log_file: str | None) -> None:
+    if not keep_target_id:
+        return
+    try:
+        targets = http_json(port, "GET", "/json/list", timeout=2.0)
+    except Exception as exc:  # noqa: BLE001 - cleanup should not fail capture.
+        log(log_file, f"WARN failed to list Brave tabs for cleanup: {exc}")
+        return
+    closed = 0
+    for target in targets:
+        target_id = target.get("id")
+        if target.get("type") != "page" or not target_id or target_id == keep_target_id:
+            continue
+        try:
+            http_ok(port, "GET", f"/json/close/{urllib.parse.quote(target_id, safe='')}", timeout=2.0)
+            closed += 1
+        except Exception as exc:  # noqa: BLE001 - best-effort tab cleanup.
+            log(log_file, f"WARN failed to close restored Brave tab {target_id}: {exc}")
+    if closed:
+        log(log_file, f"INFO closed restored dedicated Brave tabs: count={closed}")
 
 
 class WebSocket:
@@ -295,14 +329,16 @@ def auth_state(cdp: CdpClient) -> dict[str, Any]:
   const chatLinkCount = document.querySelectorAll('a[href*="/chat/"]').length;
   const composerCount = document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]').length;
   const newChatText = /new chat|새 채팅|새 대화/i.test(text);
-  const authenticated = !authUrl && !authText && (chatLinkCount > 0 || composerCount > 0 || newChatText);
+  const hasAppShell = chatLinkCount > 0 || composerCount > 0 || newChatText;
+  const authenticated = !authUrl && hasAppShell;
   return {
     url: location.href,
     title: document.title,
-    auth: !authenticated,
+    auth: authUrl || (!hasAppShell && authText),
     authenticated,
     authText,
     authUrl,
+    hasAppShell,
     chatLinkCount,
     composerCount,
     textLength
@@ -441,6 +477,7 @@ def launch_brave(args: argparse.Namespace, port: int) -> subprocess.Popen[Any]:
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-mode",
+        "--disable-session-crashed-bubble",
         "--new-window",
         "about:blank",
     ]
@@ -459,6 +496,18 @@ def terminate_process(process: subprocess.Popen[Any], log_file: str | None) -> N
         process.wait(timeout=5)
 
 
+def close_brave_cleanly(cdp: CdpClient | None, process: subprocess.Popen[Any], log_file: str | None) -> bool:
+    if cdp is None or process.poll() is not None:
+        return False
+    try:
+        cdp.call("Browser.close", timeout=3)
+        process.wait(timeout=8)
+        return True
+    except Exception as exc:  # noqa: BLE001 - fall back to process termination.
+        log(log_file, f"WARN failed to close dedicated Brave cleanly: {exc}")
+        return False
+
+
 def collect(args: argparse.Namespace) -> int:
     existing = load_existing(args.existing_session_ids_file)
     port = args.remote_debugging_port or find_free_port()
@@ -471,6 +520,7 @@ def collect(args: argparse.Namespace) -> int:
         log(args.log_file, f"INFO launched dedicated Brave profile pid={process.pid} port={port}")
         wait_for_devtools(port, args.browser_timeout)
         page = wait_for_page(port, args.start_url, args.browser_timeout)
+        close_extra_pages(port, page.get("id"), args.log_file)
         cdp = CdpClient(page["webSocketDebuggerUrl"])
         cdp.call("Page.enable")
         cdp.call("Runtime.enable")
@@ -539,10 +589,12 @@ def collect(args: argparse.Namespace) -> int:
         log(args.log_file, f"ERROR dedicated Brave scrape failed: {exc}")
         return 1
     finally:
+        if process is not None and not keep_open:
+            closed_cleanly = close_brave_cleanly(cdp, process, args.log_file)
+            if not closed_cleanly:
+                terminate_process(process, args.log_file)
         if cdp is not None:
             cdp.close()
-        if process is not None and not keep_open:
-            terminate_process(process, args.log_file)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

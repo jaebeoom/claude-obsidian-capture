@@ -6,6 +6,9 @@ Runtime context의 KST date, Capture file path, Existing capture session ids, Sc
    - Capture-worthy 포함: 투자 인사이트, 의사결정 근거, 새로운 프레임워크/관점, 장기적으로 재사용할 사고 흐름
    - 제외: 단순 Q&A, 코드 디버깅, 반복/일상 내용, Claude.ai UI 텍스트나 사이드바 노이즈
 4. 적합한 세션은 요약하지 말고 대화 원문을 아래 후보 블록 포맷으로 stdout에만 출력한다.
+   - 각 후보 블록은 반드시 `capture:item-start`로 시작하고 `capture:item-end`로 끝낸다.
+   - 후보 블록 밖에는 `capture:item-start` 또는 `capture:item-end`를 출력하지 않는다.
+   - 대화 시간대를 확신할 수 없으면 헤더 시간 자리에 `--`를 쓰지 말고 Runtime context의 KST date를 쓴다.
 5. source tag는 대화의 원천에 맞춘다.
    - Claude.ai 직접 대화 자체가 source이면 `#from/claude-ai`
    - PDF를 놓고 나눈 대화이면 `#from/pdf`

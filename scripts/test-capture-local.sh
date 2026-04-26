@@ -59,8 +59,10 @@ count_markers() {
 }
 
 APPEND_OUTPUT="$TMP_DIR/append-output.md"
-APPEND_CAPTURE="$TMP_DIR/append-capture.md"
+APPEND_CAPTURE_DIR="$TMP_DIR/append-capture"
+APPEND_CAPTURE="$APPEND_CAPTURE_DIR/append-capture.md"
 APPEND_LOG="$TMP_DIR/append.log"
+mkdir -p "$APPEND_CAPTURE_DIR"
 
 cat > "$APPEND_CAPTURE" <<'EOF'
 ## AI 세션 (09:00, claude.ai claude-opus-4-7)
@@ -84,6 +86,7 @@ cat > "$APPEND_OUTPUT" <<'EOF'
 **AI**: 중복
 
 #stage/capture #from/claude-ai
+<!-- capture:item-end -->
 <!-- capture:item-end -->
 <!-- capture:item-start -->
 ## AI 세션 (11:00, claude.ai claude-opus-4-7)
@@ -114,6 +117,67 @@ assert_equals "1" "$(count_fixed "$APPEND_CAPTURE" "capture:session-id=claude.ai
 assert_equals "0" "$(count_markers "$APPEND_CAPTURE")" "capture marker count"
 assert_file_contains "$APPEND_LOG" "INFO skipped duplicate capture candidate: claude.ai:existing"
 assert_file_contains "$APPEND_LOG" "WARN skipped capture candidate without session-id"
+assert_file_not_contains "$APPEND_LOG" "WARN capture:item-end without capture:item-start skipped"
+
+DATE_FALLBACK_OUTPUT="$TMP_DIR/date-fallback-output.md"
+DATE_FALLBACK_CAPTURE_DIR="$TMP_DIR/date-fallback-capture"
+DATE_FALLBACK_CAPTURE="$DATE_FALLBACK_CAPTURE_DIR/2099-01-07.md"
+DATE_FALLBACK_LOG="$TMP_DIR/date-fallback.log"
+mkdir -p "$DATE_FALLBACK_CAPTURE_DIR"
+
+cat > "$DATE_FALLBACK_OUTPUT" <<'EOF'
+<!-- capture:item-start -->
+## AI 세션 (--, claude.ai claude-opus-4-7)
+<!-- capture:session-id=claude.ai:date-fallback -->
+
+**나**: 날짜 fallback
+
+**AI**: 날짜 fallback
+
+#stage/capture #from/claude-ai
+<!-- capture:item-end -->
+EOF
+
+"$SCRIPT_DIR/append-candidates.sh" "$DATE_FALLBACK_OUTPUT" "$DATE_FALLBACK_CAPTURE" "$DATE_FALLBACK_LOG"
+
+assert_file_contains "$DATE_FALLBACK_CAPTURE" "## AI 세션 (2099-01-07, claude.ai claude-opus-4-7)"
+assert_file_not_contains "$DATE_FALLBACK_CAPTURE" "## AI 세션 (--,"
+
+GLOBAL_DEDUPE_DIR="$TMP_DIR/global-dedupe"
+GLOBAL_OLD_CAPTURE="$GLOBAL_DEDUPE_DIR/2099-01-08.md"
+GLOBAL_NEW_CAPTURE="$GLOBAL_DEDUPE_DIR/2099-01-09.md"
+GLOBAL_OUTPUT="$TMP_DIR/global-dedupe-output.md"
+GLOBAL_LOG="$TMP_DIR/global-dedupe.log"
+mkdir -p "$GLOBAL_DEDUPE_DIR"
+
+cat > "$GLOBAL_OLD_CAPTURE" <<'EOF'
+## AI 세션 (2099-01-08, claude.ai claude-opus-4-7)
+<!-- capture:session-id=claude.ai:global-existing -->
+
+**나**: 기존 날짜
+
+**AI**: 기존 날짜
+
+#stage/capture #from/claude-ai
+EOF
+
+cat > "$GLOBAL_OUTPUT" <<'EOF'
+<!-- capture:item-start -->
+## AI 세션 (09:00, claude.ai claude-opus-4-7)
+<!-- capture:session-id=claude.ai:global-existing -->
+
+**나**: 다른 날짜 중복
+
+**AI**: 다른 날짜 중복
+
+#stage/capture #from/claude-ai
+<!-- capture:item-end -->
+EOF
+
+"$SCRIPT_DIR/append-candidates.sh" "$GLOBAL_OUTPUT" "$GLOBAL_NEW_CAPTURE" "$GLOBAL_LOG"
+
+assert_file_not_exists "$GLOBAL_NEW_CAPTURE"
+assert_file_contains "$GLOBAL_LOG" "INFO skipped duplicate capture candidate: claude.ai:global-existing"
 
 NO_CAPTURE_OUTPUT="$TMP_DIR/no-capture-output.md"
 NO_CAPTURE_FILE="$TMP_DIR/no-capture.md"

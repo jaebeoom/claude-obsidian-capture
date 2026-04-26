@@ -32,6 +32,8 @@ extract_session_ids() {
   local capture_file="$1"
   local line rest session_id
 
+  [[ -f "$capture_file" ]] || return 0
+
   while IFS= read -r line; do
     if [[ "$line" == *capture:session-id=* ]]; then
       rest="${line#*capture:session-id=}"
@@ -39,6 +41,17 @@ extract_session_ids() {
       [[ -n "$session_id" ]] && printf '%s\n' "$session_id"
     fi
   done < "$capture_file"
+}
+
+extract_all_session_ids() {
+  local capture_dir="$1"
+  local capture_file
+
+  [[ -d "$capture_dir" ]] || return 0
+
+  for capture_file in "$capture_dir"/*.md(N); do
+    extract_session_ids "$capture_file"
+  done | sort -u
 }
 
 cleanup() {
@@ -88,12 +101,9 @@ fi
 
 log "INFO capture run started for $DATE"
 
-EXISTING_SESSION_IDS=""
-if [[ -f "$CAPTURE_FILE" ]]; then
-  if ! EXISTING_SESSION_IDS="$(extract_session_ids "$CAPTURE_FILE" 2>> "$LOG_FILE")"; then
-    log "ERROR failed to read existing capture session ids from: $CAPTURE_FILE"
-    exit 1
-  fi
+if ! EXISTING_SESSION_IDS="$(extract_all_session_ids "$VAULT_CAPTURE" 2>> "$LOG_FILE")"; then
+  log "ERROR failed to read existing capture session ids from: $VAULT_CAPTURE"
+  exit 1
 fi
 
 if [[ -n "${CLAUDE_CAPTURE_OUTPUT_FILE:-}" ]]; then
